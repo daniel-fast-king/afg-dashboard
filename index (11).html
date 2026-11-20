@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AFG Dashboard</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--bg:var(--tg-theme-bg-color,#fff);--tx:var(--tg-theme-text-color,#1b1f23);--mu:var(--tg-theme-hint-color,#7a828c);--cd:var(--tg-theme-secondary-bg-color,#f2f4f7);--ac:var(--tg-theme-button-color,#0f766e);--ab:var(--tg-theme-button-text-color,#fff);
+--c1:#0f766e;--c2:#e08a1e;--c3:#4c6ef5;--c4:#d6336c;--c5:#7048e8;--c6:#2f9e44;--c7:#868e96}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--tx);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:10px 10px 40px}
+h1{font-size:18px;margin:4px 2px 8px}
+h2{font-size:14px;margin-bottom:8px}
+.row{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}
+.row::-webkit-scrollbar{display:none}
+.chip{flex:none;border:0;border-radius:16px;padding:7px 12px;background:var(--cd);color:var(--tx);font:inherit}
+.chip.on{background:var(--ac);color:var(--ab)}
+.tabs{position:sticky;top:0;background:var(--bg);padding:6px 0;z-index:5}
+.card{background:var(--cd);border-radius:14px;padding:12px;margin-top:10px}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.kpi{background:var(--cd);border-radius:14px;padding:10px 12px}
+.kpi b{display:block;font-size:22px}
+.kpi span{color:var(--mu);font-size:12px}
+.up{color:#2f9e44}.dn{color:#e03131}
+.bl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;margin-bottom:7px}
+.bl i{grid-column:1/3;display:block;height:7px;border-radius:4px;background:var(--c1);opacity:.85}
+.bl small{color:var(--mu)}
+.bl div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.don{display:flex;gap:14px;align-items:center}
+.ring{flex:none;width:110px;height:110px;border-radius:50%;position:relative}
+.ring:after{content:"";position:absolute;inset:26px;border-radius:50%;background:var(--cd)}
+.lg{font-size:12px;flex:1;min-width:0}
+.lg div{display:flex;gap:6px;align-items:center;margin:3px 0}
+.lg em{flex:none;width:10px;height:10px;border-radius:3px}
+.lg span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cols{display:flex;align-items:flex-end;gap:2px;height:90px}
+.cols i{flex:1;background:var(--c1);border-radius:3px 3px 0 0;min-height:2px}
+.ax{display:flex;justify-content:space-between;color:var(--mu);font-size:11px;margin-top:3px}
+.hm{display:grid;grid-template-columns:34px repeat(8,1fr);gap:3px;font-size:11px;align-items:center}
+.hm i{height:22px;border-radius:5px;background:var(--c1)}
+.hm span{color:var(--mu)}
+svg{width:100%;height:auto;display:block}
+.note{color:var(--mu);font-size:12px;margin-top:8px}
+.err{background:#fff0f0;color:#c92a2a;padding:12px;border-radius:12px;margin-top:10px}
+</style>
+</head>
+<body>
+<script>
+// ===== STEP 1: PASTE YOUR FUNCTION ADDRESS HERE (the only thing to edit) =====
+var API = "https://gqshbhastloknazqmguk.supabase.co/functions/v1/telegram-admin";
+// ============================================================================
+var tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+var RANGES = [["today","Today"],["w","7 days"],["2w","2 weeks"],["m","1 month"],["3m","3 months"],["6m","6 months"],["2y","2 years"]];
+var TABS = [["ov","Overview"],["tm","Time"],["pp","People"],["ct","Content"],["dv","Devices"]];
+var S = { range: "w", tab: "ov", data: null, busy: false, err: "" };
+var COL = ["--c1","--c2","--c3","--c4","--c5","--c6","--c7"];
+var $ = function (id) { return document.getElementById(id); };
+var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+var num = function (x) { return Number(x || 0).toLocaleString("en-US"); };
+var secs = function (s) { return s < 60 ? Math.round(s) + " sec" : Math.round(s / 60) + " min"; };
+var pc = function (a, b) { return b ? Math.round(a / b * 100) : 0; };
+
+function delta(a, b) {
+  if (b === null || b === undefined) return "";
+  if (!b) return a ? '<span class="up">new</span>' : "";
+  var d = Math.round((a - b) / b * 100);
+  return '<span class="' + (d >= 0 ? "up" : "dn") + '">' + (d >= 0 ? "▲ " : "▼ ") + Math.abs(d) + "% vs before</span>";
+}
+function kpi(label, v, extra) { return '<div class="kpi"><span>' + label + "</span><b>" + v + "</b>" + (extra ? "<span>" + extra + "</span>" : "") + "</div>"; }
+function card(title, body) { return '<div class="card"><h2>' + title + "</h2>" + body + "</div>"; }
+
+function bars(items, empty) {
+  if (!items || !items.length) return '<div class="note">' + (empty || "No data in this period.") + "</div>";
+  var mx = Math.max.apply(null, items.map(function (x) { return x.v; }).concat([1]));
+  return items.map(function (x) {
+    return '<div class="bl"><div>' + esc(x.k) + "</div><small>" + num(x.v) + (x.p ? " · " + x.p + " ppl" : "") + '</small><i style="width:' + Math.max(3, x.v / mx * 100) + '%"></i></div>';
+  }).join("");
+}
+function donut(items) {
+  if (!items || !items.length) return '<div class="note">No data in this period.</div>';
+  var tot = items.reduce(function (a, x) { return a + x.v; }, 0) || 1, at = 0, stops = [];
+  items.forEach(function (x, i) {
+    var a = at / tot * 360; at += x.v; var b = at / tot * 360;
+    stops.push("var(" + COL[i % 7] + ") " + a + "deg " + b + "deg");
+  });
+  var lg = items.map(function (x, i) {
+    return '<div><em style="background:var(' + COL[i % 7] + ')"></em><span>' + esc(x.k) + "</span><b>" + pc(x.v, tot) + "%</b></div>";
+  }).join("");
+  return '<div class="don"><div class="ring" style="background:conic-gradient(' + stops.join(",") + ')"></div><div class="lg">' + lg + "</div></div>";
+}
+function line(vals, labels, colorVar) {
+  var W = 320, H = 110, P = 6, mx = Math.max.apply(null, vals.concat([1])), n = vals.length;
+  if (!n) return '<div class="note">No data.</div>';
+  var pt = vals.map(function (v, i) { return [P + (n > 1 ? i / (n - 1) : .5) * (W - 2 * P), H - P - v / mx * (H - 2 * P)]; });
+  var d = pt.map(function (p, i) { return (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1); }).join("");
+  var area = d + "L" + pt[n - 1][0] + " " + (H - P) + "L" + pt[0][0] + " " + (H - P) + "Z";
+  var c = "var(" + colorVar + ")";
+  return '<svg viewBox="0 0 ' + W + " " + H + '"><path d="' + area + '" fill="' + c + '" opacity=".15"/><path d="' + d + '" fill="none" stroke="' + c + '" stroke-width="2.5" stroke-linejoin="round"/>' +
+    pt.map(function (p) { return n <= 31 ? '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="2.5" fill="' + c + '"/>' : ""; }).join("") + "</svg>" +
+    '<div class="ax"><span>' + esc(labels[0]) + "</span><span>peak " + num(mx) + "</span><span>" + esc(labels[n - 1]) + "</span></div>";
+}
+function cols(vals, labels) {
+  var mx = Math.max.apply(null, vals.concat([1]));
+  return '<div class="cols">' + vals.map(function (v, i) { return '<i title="' + esc(labels[i]) + ": " + v + '" style="height:' + Math.max(2, v / mx * 100) + '%"></i>'; }).join("") + "</div>" +
+    '<div class="ax"><span>' + esc(labels[0]) + "</span><span>" + esc(labels[Math.floor(labels.length / 2)]) + "</span><span>" + esc(labels[labels.length - 1]) + "</span></div>";
+}
+function heat(g) {
+  var days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], mx = 1;
+  g.forEach(function (r) { r.forEach(function (v) { mx = Math.max(mx, v); }); });
+  var h = '<div class="hm"><span></span>' + ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"].map(function (x) { return "<span>" + x + "</span>"; }).join("");
+  g.forEach(function (r, i) {
+    h += "<span>" + days[i] + "</span>" + r.map(function (v) { return '<i title="' + v + '" style="opacity:' + (v ? .15 + v / mx * .85 : .07) + '"></i>'; }).join("");
+  });
+  return h + "</div>";
+}
+
+var VIEWS = {
+  ov: function (d) {
+    var k = d.kpi, s = d.series || [], L = s.map(function (x) { return x.label; });
+    return '<div class="kpis">' +
+      kpi("Total users", num(k.users), "+" + num(k.newUsers) + " this period " + delta(k.newUsers, k.prevNewUsers)) +
+      kpi("Active people", num(k.people), delta(k.people, k.prevPeople)) +
+      kpi("Actions", num(k.actions), delta(k.actions, k.prevActions)) +
+      kpi("Visits", num(k.sessions), "avg " + secs(k.avgSession)) + "</div>" +
+      card("Active people over time", line(s.map(function (x) { return x.people; }), L, "--c1")) +
+      card("Actions over time", line(s.map(function (x) { return x.actions; }), L, "--c3")) +
+      card("New signups", line(s.map(function (x) { return x.newUsers; }), L, "--c2")) +
+      card("Total users growth", line(s.map(function (x) { return x.total; }), L, "--c5")) +
+      card("Engagement funnel", bars((d.funnel || []).map(function (x) { return { k: x.k + " (" + pc(x.v, d.funnel[0].v) + "%)", v: x.v }; })));
+  },
+  tm: function (d) {
+    var hl = d.hours.map(function (_, i) { return i + ":00"; });
+    return card("Busy hours (Ethiopia time)", cols(d.hours, hl)) +
+      card("Busy weekdays", cols(d.weekdays, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])) +
+      card("Weekday × time heatmap", heat(d.heat)) +
+      card("How long visits last", donut(d.sessionBuckets)) +
+      card("Where people leave the app", bars(d.leave));
+  },
+  pp: function (d) {
+    var top = (d.topPeople || []).map(function (x) {
+      return { k: "0" + String(x.phone).slice(3), v: x.actions, p: 0 };
+    });
+    return card("How many days people come back", donut(d.dayBuckets)) +
+      card("Most active people", bars(top)) +
+      '<div class="note">Open any person inside the bot by typing their number.</div>';
+  },
+  ct: function (d) {
+    return card("Most opened content", bars(d.topContent)) +
+      card("Subjects", donut(d.subjects.map(function (x) { return { k: x.k, v: x.v }; }))) +
+      card("Sections", bars(d.sections)) + card("Exam years", bars(d.years)) +
+      card("Screens", donut(d.screens)) + card("Top taps", bars(d.taps)) + card("Event types", bars(d.events));
+  },
+  dv: function (d) {
+    return card("Phones", donut(d.phones)) + card("Android version", donut(d.os)) +
+      card("App version", donut(d.appv)) + card("Connection", donut(d.conn)) +
+      card("Theme", donut(d.theme)) + card("Language", donut(d.lang)) + card("Battery", donut(d.battery));
+  }
+};
+
+function chips(list, cur, fn) {
+  return '<div class="row">' + list.map(function (x) {
+    return '<button class="chip' + (x[0] === cur ? " on" : "") + '" onclick="' + fn + "('" + x[0] + "')\">" + x[1] + "</button>";
+  }).join("") + "</div>";
+}
+function setRange(r) { S.range = r; load(); }
+function setTab(t) { S.tab = t; draw(); window.scrollTo(0, 0); }
+function draw() {
+  var h = "<h1>📊 AFG Dashboard</h1><div class='tabs'>" + chips(RANGES, S.range, "setRange") + chips(TABS, S.tab, "setTab") + "</div>";
+  if (S.busy) h += '<div class="card note">Loading… big ranges can take a few seconds.</div>';
+  else if (S.err) h += '<div class="err">' + esc(S.err) + "</div>";
+  else if (S.data) {
+    h += VIEWS[S.tab](S.data);
+    var m = S.data.meta || {};
+    h += '<div class="note">Live data + ' + (m.files || 0) + " saved GitHub files, combined. Updated " + new Date(S.data.generated).toLocaleTimeString() + ".</div>";
+    if (m.err || m.failed || m.skipped) h += '<div class="note">⚠️ Some archive files could not be read, so old numbers may be low.</div>';
+  }
+  $("app").innerHTML = h;
+}
+function load() {
+  S.busy = true; S.err = ""; draw();
+  if (API.indexOf("YOUR-PROJECT-ID") >= 0) { S.busy = false; S.err = "Step 1 not done: open index.html and paste your function address at the top."; draw(); return; }
+  fetch(API, { method: "POST", headers: { "Content-Type": "application/json", "x-tg-init": (tg && tg.initData) || "" }, body: JSON.stringify({ range: S.range }) })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { if (j.error) throw new Error(j.error); S.data = j; })
+    .catch(function (e) { S.err = (e.message || e) + ((tg && tg.initData) ? "" : " (Open this page from the bot's Dashboard button, not in a browser.)"); })
+    .then(function () { S.busy = false; draw(); });
+}
+document.body.insertAdjacentHTML("afterbegin", '<div id="app"></div>');
+load();
+</script>
+</body>
+</html>
